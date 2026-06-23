@@ -1,0 +1,15 @@
+[project]
+name = "majiang-ai-prototype"
+version = "0.1.0"
+description = "Prototype decision engine for Guangdong Tuidaohu mahjong."
+requires-python = ">=3.10"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

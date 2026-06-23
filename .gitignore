@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+
+# 调试截图 & 临时文件
+*.png
+scan_layout.py
+
+# 模板目录 (用户自行采集)
+tile_templates/
+
+# IDE
+.vscode/
+.idea/
+
+# 环境
+venv/
+.venv/
+env/
