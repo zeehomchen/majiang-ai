@@ -1,4 +1,4 @@
-"""命令行入口 -- 支持手动编码输入和 DirectX 实时捕获两种模式。"""
+"""命令行入口 -- 支持手动编码输入、DirectX 实时捕获、MCTS 三种模式。"""
 
 from __future__ import annotations
 
@@ -8,6 +8,35 @@ import sys
 import time
 
 from .evaluator import evaluate_hand, result_to_dict
+
+
+# 编码 -> 中文牌名映射
+_SUIT_MAP = {"m": "万", "p": "筒", "s": "条"}
+_ZH_NUMS = {"1": "一", "2": "二", "3": "三", "4": "四", "5": "五", "6": "六", "7": "七", "8": "八", "9": "九"}
+_HONOR_MAP = {"1z": "东", "2z": "南", "3z": "西", "4z": "北", "5z": "白", "6z": "发", "7z": "中"}
+
+
+def code_to_chinese(code: str) -> str:
+    """'3m' -> '三万', '7z' -> '中'"""
+    if code in _HONOR_MAP:
+        return _HONOR_MAP[code]
+    if len(code) >= 2 and code[-1] in _SUIT_MAP:
+        rank, suit = code[:-1], code[-1]
+        num = _ZH_NUMS.get(rank, rank)
+        return f"{num}{_SUIT_MAP[suit]}"
+    return code
+
+
+def hand_to_readable(compact: str) -> str:
+    """'123m555p' -> '一万 二万 三万 五筒 五筒 五筒'"""
+    from .parser import parse_tile_list
+    tiles = parse_tile_list(compact)
+    return " ".join(code_to_chinese(t.code) for t in tiles) if tiles else compact
+
+
+def discards_to_readable(codes: list[str]) -> str:
+    """['3m','7z'] -> '三万, 中'"""
+    return ", ".join(code_to_chinese(c) for c in codes)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -85,6 +114,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="(实时模式) 轮询间隔 (秒)，默认 3.0",
     )
 
+    # ---- MCTS 参数 ----
+    parser.add_argument(
+        "--mcts",
+        action="store_true",
+        help="使用 MCTS 蒙特卡洛搜索替代启发式评估",
+    )
+    parser.add_argument(
+        "--sims",
+        type=int,
+        default=5000,
+        help="(MCTS) 模拟次数，默认 5000。值越大决策越准但越慢",
+    )
+    parser.add_argument(
+        "--mcts-mode",
+        default="flat",
+        choices=("flat", "tree"),
+        help="(MCTS) flat=根采样, tree=UCB1树搜索。默认 flat",
+    )
+    parser.add_argument(
+        "--mcts-timeout",
+        type=float,
+        default=8000,
+        help="(MCTS) 时间上限 (毫秒)，默认 8000",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="(MCTS) 显示详细搜索进度",
+    )
+
     return parser
 
 
@@ -110,17 +169,24 @@ def _save_debug_images(hand_frame, river_frame) -> None:
 def _print_text_result(result_dict: dict, top: int) -> None:
     options = result_dict["options"][:top]
     best = options[0]
-    print(f"当前手牌: {result_dict['hand']}")
-    print(f"建议切牌: {best['discard']}")
+    hand_raw = result_dict["hand"]
+    print(f"当前手牌: {hand_to_readable(hand_raw)}")
+    print(f"  (编码: {hand_raw})")
+    print(f"建议切牌: {code_to_chinese(best['discard'])} ({best['discard']})")
     print(f"综合评分: {best['total_score']}")
     print()
     print("Top 选项:")
     for index, option in enumerate(options, start=1):
+        discard_code = option["discard"]
         print(
-            f"{index}. 打 {option['discard']} | 总分 {option['total_score']} | "
+            f"{index}. 打 {code_to_chinese(discard_code)} ({discard_code}) | "
+            f"总分 {option['total_score']} | "
             f"基础分 {option['base_score']} | 有效进张 {option['effective_draws']}"
         )
-        print("   改良牌: " + (", ".join(option["improving_tiles"]) or "-"))
+        improv = ", ".join(
+            f"{code_to_chinese(t)}" for t in option["improving_tiles"]
+        ) if option["improving_tiles"] else "-"
+        print(f"   改良牌: {improv}")
         for line in option["summary"]:
             print("   - " + line)
         if option["route_scores"]:
@@ -129,6 +195,25 @@ def _print_text_result(result_dict: dict, top: int) -> None:
             )
             print("   路线评分: " + route_text)
         print()
+
+
+def _print_mcts_result(result, top: int) -> None:
+    """打印 MCTS 搜索结果。"""
+    options = result.options[:top]
+    best = options[0]
+    print(f"算法: MCTS ({result.mode}), {result.simulations} 次模拟, {result.elapsed_ms:.0f}ms")
+    print(f"建议切牌: {code_to_chinese(best['discard'])} ({best['discard']})")
+    print(f"MCTS 评分: {best['score']:.1f}")
+    print(f"预估胜率: {best.get('win_rate', 0):.1f}%")
+    print()
+    print("Top 选项:")
+    for i, opt in enumerate(options):
+        dc = opt["discard"]
+        print(
+            f"  {i+1}. 打 {code_to_chinese(dc)} ({dc}) | 评分 {opt['score']:.1f} | "
+            f"胜率 {opt.get('win_rate', 0):.1f}% | "
+            f"模拟 {opt['simulations']} 次"
+        )
 
 
 def _run_live(args: argparse.Namespace) -> int:
@@ -198,9 +283,12 @@ def _run_live(args: argparse.Namespace) -> int:
 
             visible = result.visible_compact or ""
 
-            print(f"[{time.strftime('%H:%M:%S')}] 识别手牌: {hand}")
+            print(f"[{time.strftime('%H:%M:%S')}] 识别手牌: {hand_to_readable(hand)}")
             if visible:
-                print(f"  可见牌: {visible}")
+                visible_readable = ", ".join(
+                    code_to_chinese(c.strip()) for c in visible.split(",") if c.strip()
+                )
+                print(f"  可见牌: {visible_readable}")
 
             # 决策
             try:
@@ -231,7 +319,33 @@ def _run_live(args: argparse.Namespace) -> int:
 
 
 def _run_manual(args: argparse.Namespace) -> int:
-    """手动编码输入模式 (原有逻辑)。"""
+    """手动编码输入模式 (支持启发式和 MCTS)。"""
+    # MCTS 模式
+    if args.mcts:
+        from .mcts import mcts_discard
+
+        result = mcts_discard(
+            hand_compact=args.hand,
+            visible_compact=args.visible,
+            simulations=args.sims,
+            mode=args.mcts_mode,
+            time_limit_ms=args.mcts_timeout,
+            verbose=args.verbose,
+        )
+        if args.json:
+            print(json.dumps({
+                "best_discard": result.best_discard,
+                "best_score": result.best_score,
+                "simulations": result.simulations,
+                "elapsed_ms": result.elapsed_ms,
+                "mode": result.mode,
+                "options": result.options,
+            }, ensure_ascii=False, indent=2))
+        else:
+            _print_mcts_result(result, top=args.top)
+        return 0
+
+    # 启发式模式 (原有)
     result = evaluate_hand(
         hand=args.hand,
         visible_tiles=args.visible,

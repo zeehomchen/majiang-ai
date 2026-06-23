@@ -5,6 +5,8 @@ Provides:
 - parser    : tile string encoding/decoding
 - capture   : DirectX screen capture (dxcam)
 - vision    : tile image recognition
+- simulator : full game simulation engine
+- mcts      : Monte Carlo Tree Search optimizer
 - cli       : command-line interface
 """
 
