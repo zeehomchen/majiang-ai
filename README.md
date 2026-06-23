@@ -1,86 +1,212 @@
-# 广东推倒胡算牌器原型
+# 广东推倒胡智能算牌器
 
-这是根据上层目录中的 `majiang.md` 需求文档生成的一个 `Python` 可运行原型。
+基于 **DirectX 截屏 + 图像识别 + MCTS 蒙特卡洛搜索** 的麻将决策引擎，专为**广东推倒胡**规则深度优化。
 
-当前版本重点落地了 4 个核心能力：
+## 这是什么
 
-- 牌面字符串解析
-- 广东推倒胡基础规则建模
-- 高番路线评分
-- 最优切牌建议
+一个能从腾讯麻将画面中实时抓取手牌、自动分析牌面、给出最优出牌建议的 AI 助手。
 
-## 项目结构
+核心决策支持三种模式：
 
-```text
-majiang-ai-prototype/
-├─ main.py
-├─ pyproject.toml
-└─ src/
-   └─ majiang_ai/
-      ├─ __init__.py
-      ├─ cli.py
-      ├─ evaluator.py
-      ├─ models.py
-      └─ parser.py
+| 模式 | 速度 | 精度 | 适用场景 |
+| --- | --- | --- | --- |
+| 启发式评估 | 极快 (< 0.1s) | 中 | 快速参考 |
+| MCTS 搜索 | 较慢 (2-8s) | 高 | 关键决策 |
+| DirectX 实时 | 每轮自动 | 取决于识别 | 实战使用 |
+
+---
+
+## 功能总览
+
+### 输入能力
+
+| 输入方式 | 说明 |
+| --- | --- |
+| 手动编码 | `python main.py --hand 123m555678p1122s` |
+| DirectX 实时截屏 | `python main.py --live`，自动锁定腾讯麻将窗口抓取 |
+| 可见牌/碰杠信息 | `--visible` `--melds` 参数，用于局势分析 |
+
+### 分析能力
+
+* 牌面结构识别（顺子、对子、刻子、搭子、孤张）
+* 有效进张数与改良牌计算
+* 向听数估算
+* 绝张 / 剩余张数追踪
+
+### 路线评估
+
+系统会为手牌同时评估以下路线，并计入综合评分：
+
+| 路线 | 触发条件 |
+| --- | --- |
+| 碰碰胡 | 对子 + 刻子数量达标 |
+| 清一色 / 混一色 | 单花色集中度 |
+| 七小对 / 豪华七对 | 对子型路线（门清） |
+| 十三幺 | 幺九 + 字牌收集 |
+| 大三元 / 小三元 | 中发白刻子 |
+| 大四喜 / 小四喜 | 东南西北风牌 |
+| 混幺九 / 清幺九 / 字一色 | 幺九字牌路线 |
+
+### 输出内容
+
+```
+当前手牌: 一萬 二萬 三萬 五筒 五筒 五筒 六筒 七筒 八筒 一条 一条 二条 二条
+建议切牌: 三萬 (3m)
+综合评分: 322.89
+
+Top 选项:
+1. 打 三萬 (3m) | 总分 322.89 | 有效进张 28
+   改良牌: 一萬, 二萬, 三筒, 四筒, 五筒, 六筒, 一条, 二条
+   路线评分: 碰碰胡=51, 七小对=48, 清一色趋势=12
 ```
 
-## 已实现能力
+所有输出均使用**中文牌名**（一萬、五筒、一条、東、中 等），括号内保留编码供核对。
 
-- 支持 `123m555678p1122s` 这类紧凑牌面输入
-- 支持桌面可见牌输入，用于绝张和剩余张数判断
-- 支持他家碰杠信息输入，用于抢杠胡机会的启发式评估
-- 支持以下高权重路线的评分：
-  - `碰碰胡`
-  - `清一色 / 混一色`
-  - `七小对 / 豪华七对`
-  - `十三幺`
-  - `大三元 / 小三元`
-  - `大四喜 / 小四喜`
-  - `混幺九 / 清幺九 / 字一色`
-  - `抢杠胡机会`
-  - `杠上开花潜力`
+---
 
-## 运行方式
-
-直接运行：
+## 安装
 
 ```bash
+# 1. 克隆项目
+git clone https://github.com/zeehomchen/majiang-ai.git
+cd majiang-ai
+
+# 2. 安装依赖
+pip install opencv-python numpy pillow mss dxcam
+```
+
+## 快速开始
+
+### 方式一：手动模式（纯编码输入）
+
+```bash
+# 基础
 python main.py --hand 123m555678p1122s
-```
 
-带可见牌和阶段参数：
+# 带可见牌
+python main.py --hand 123m555678p1122s --visible 3m,3m,7z
 
-```bash
-python main.py --hand 123m555678p1122s --visible 3m,3m,7z --phase early
-```
+# 带牌局阶段
+python main.py --hand 123m555678p1122s --phase late
 
-带他家明刻信息：
-
-```bash
-python main.py --hand 123m555678p1122s --melds 555p 777z
-```
-
-输出 JSON：
-
-```bash
+# JSON 输出
 python main.py --hand 123m555678p1122s --json
 ```
 
-## 当前实现说明
+### 方式二：MCTS 搜索模式（模拟 5000 局找最优）
 
-这是原型版，不是完整比赛级麻将 AI。当前实现更偏“可运行的决策内核”，便于你继续接：
+```bash
+python main.py --hand 123m555678p1122s --mcts
 
-- `DirectX` 图像识别输入层
-- 桌面状态同步层
-- 更精确的向听数算法
-- 更完整的碰、杠、听牌、点炮博弈逻辑
-- API 服务或桌面应用界面
+# 调整模拟次数
+python main.py --hand 123m555678p1122s --mcts --sims 10000
 
-## 下一步建议
+# UCB1 树搜索模式
+python main.py --hand 123m555678p1122s --mcts --mcts-mode tree
 
-如果你准备继续做项目，我建议下一步按下面顺序推进：
+# 显示搜索进度
+python main.py --hand 123m555678p1122s --mcts --verbose
+```
 
-1. 增加 `DirectX/截图识别 -> 牌面编码` 输入模块
-2. 把当前启发式评分升级为更严格的向听数与番型搜索
-3. 把 `碰 / 杠 / 抢杠胡 / 杠上开花` 做成独立决策分支
-4. 封装成 `FastAPI` 或桌面工具，方便联调
+### 方式三：DirectX 实时模式
+
+```bash
+# 1. 打开腾讯麻将，进入对局界面
+# 2. 运行校准（生成区域叠加图）
+python main.py --calibrate
+
+# 3. 打开 calibration_overlay.png，确认区域正确后运行实时模式
+python main.py --live
+
+# 指定窗口标题
+python main.py --live --window "QQ游戏"
+
+# 调整轮询间隔
+python main.py --live --interval 2.0
+```
+
+按 `Ctrl+C` 停止。
+
+---
+
+## 项目结构
+
+```
+majiang-ai-prototype/
+├── main.py                   # 入口文件
+├── pyproject.toml            # 项目配置
+├── README.md                 # 本文档
+├── .gitignore
+└── src/
+    └── majiang_ai/
+        ├── __init__.py       # 包定义
+        ├── cli.py            # 命令行界面（三种模式）
+        ├── parser.py         # 牌面编码解析（紧凑串 ↔ Tile 对象）
+        ├── models.py         # 数据结构定义
+        ├── evaluator.py      # 启发式路线评估 + 最优切牌
+        ├── capture.py        # DirectX 截屏（dxcam / mss）
+        ├── vision.py         # 牌面图像识别（手牌分割 + 花色颜色判断）
+        ├── simulator.py      # 对局模拟器（136 张牌墙、碰/杠/和牌）
+        └── mcts.py           # MCTS 搜索（flat 采样 + UCB1 树）
+```
+
+## 调用链路
+
+```
+DirectX 截屏 (capture.py)
+    ↓
+图像识别 (vision.py) → 牌面编码
+    ↓
+编码解析 (parser.py) → Tile 列表
+    ↓
+决策引擎 ───┬── 启发式评估 (evaluator.py)
+            └── MCTS 搜索 (mcts.py + simulator.py)
+    ↓
+中文牌名输出 (cli.py) → 最优切牌建议
+```
+
+## 命令行参数一览
+
+| 参数 | 说明 | 默认值 |
+| --- | --- | --- |
+| `--hand` | 紧凑手牌编码 | - |
+| `--live` | DirectX 实时模式 | - |
+| `--calibrate` | 校准区域坐标 | - |
+| `--capture-templates` | 采集牌面模板 | - |
+| `--mcts` | MCTS 搜索模式 | - |
+| `--sims` | MCTS 模拟次数 | 5000 |
+| `--mcts-mode` | flat / tree | flat |
+| `--mcts-timeout` | MCTS 时间上限 (ms) | 8000 |
+| `--verbose` | 搜索进度输出 | - |
+| `--visible` | 可见牌列表（逗号分隔） | - |
+| `--melds` | 他家碰杠牌（空格分隔） | - |
+| `--phase` | 牌局阶段 early/mid/late | early |
+| `--open-hand` | 标记已副露 | - |
+| `--top` | 显示前 N 选项 | 5 |
+| `--json` | JSON 格式输出 | - |
+| `--window` | 实时模式的窗口标题 | - |
+| `--interval` | 实时模式轮询间隔 (秒) | 3.0 |
+
+## 状态
+
+| 模块 | 状态 |
+| --- | --- |
+| 牌面编码解析 | 完成 |
+| 启发式路线评估 | 完成 |
+| MCTS 搜索 | 完成 |
+| 对局模拟器 | 完成 |
+| DirectX 截屏 | 完成（mss 引擎可用，待校准） |
+| 牌面图像识别 | 完成（待实测校准） |
+| 中文牌名输出 | 完成 |
+
+## 下一步计划
+
+1. 实时模式校准 + 实战验证
+2. MCTS 性能优化（减少单局模拟耗时）
+3. 碰/杠/抢杠胡独立决策分支
+4. 对手行为建模
+5. Web 面板 / FastAPI 服务
+
+---
+
+MIT. Free forever. Go build something.
