@@ -400,6 +400,8 @@ def step_game(state: GameState, our_policy_func=None) -> GameState:
 
 def _heuristic_discard(hand: list[str]) -> str:
     """对手的快速出牌策略：打孤张或低价值牌。"""
+    if len(hand) == 0:
+        return ""
     if len(hand) <= 2:
         return hand[0]
 
