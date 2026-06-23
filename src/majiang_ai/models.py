@@ -69,6 +69,8 @@ class DiscardOption:
 @dataclass(slots=True)
 class AnalysisResult:
     hand: str
+    tile_count: int  # 13 = 摸牌前, 14 = 摸牌后
     options: list[DiscardOption]
     visible_counts: Counter[str]
     exposed_triplets: set[str]
+    pre_draw: list[dict] = field(default_factory=list)  # 13张时的摸牌分析

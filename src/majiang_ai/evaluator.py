@@ -255,7 +255,7 @@ def evaluate_hand(
 ) -> AnalysisResult:
     tiles = sort_tiles(parse_tile_list(hand))
     if len(tiles) < 2:
-        raise ValueError("Hand must contain at least 2 tiles")
+        raise ValueError("手牌至少需要 2 张")
 
     visible_list = parse_tile_list(visible_tiles)
     exposed_list = parse_tile_list(exposed_triplets)
@@ -266,6 +266,83 @@ def evaluate_hand(
         round_phase=round_phase,
         closed_hand=closed_hand,
     )
+
+    # ---------- 13 张：摸牌前分析 ----------
+    if len(tiles) == 13:
+        return _analyze_pre_draw(tiles, context)
+
+    # ---------- 14 张：正常切牌 ----------
+    return _analyze_discard(tiles, context)
+
+
+def _analyze_pre_draw(tiles: list[Tile], context: TableContext) -> AnalysisResult:
+    """13 张手牌：模拟每张可能摸到的牌，分析摸牌后应该怎么打。"""
+    from collections import Counter as _Counter
+
+    hand_counts = _copy_counts(tiles)
+    draw_results: list[dict] = []
+
+    for code in ALL_TILE_CODES:
+        remaining = _remaining_copies(code, hand_counts, context.visible_counts)
+        if remaining <= 0:
+            continue
+
+        # 模拟摸到这张牌后的 14 张手牌
+        drawn_tile = Tile(rank=int(code[0]), suit=code[1])
+        hand_14 = sort_tiles(tiles + [drawn_tile])
+
+        # 检查是否自摸
+        from .simulator import is_winning_hand as sim_is_winning
+
+        code_list_14 = [t.code for t in hand_14]
+        is_win = sim_is_winning(code_list_14)
+
+        # 检查是否听牌（13张时）
+        code_list_13 = [t.code for t in tiles]
+        from .simulator import is_tenpai as sim_is_tenpai, tenpai_waiting_tiles as sim_tenpai_waits
+
+        was_tenpai = sim_is_tenpai(code_list_13)
+        tenpai_waits = sim_tenpai_waits(code_list_13) if was_tenpai else []
+
+        # 摸牌后的最佳切牌
+        result_14 = _analyze_discard(hand_14, context)
+        best = result_14.options[0] if result_14.options else None
+
+        entry = {
+            "draw": code,
+            "is_win": is_win,
+            "was_tenpai": was_tenpai,
+            "tenpai_waits": tenpai_waits,
+            "best_discard": best.discard if best else "",
+            "score": best.total_score if best else 0,
+            "remaining": remaining,
+            "effective_draws": best.effective_draws if best else 0,
+        }
+        draw_results.append(entry)
+
+    # 排序：自摸 > 听牌 > 高评分
+    def _sort_key(d: dict) -> float:
+        if d["is_win"]:
+            return 10000.0
+        if d["was_tenpai"]:
+            return 5000.0 + d.get("score", 0)
+        return d.get("score", 0)
+
+    draw_results.sort(key=_sort_key, reverse=True)
+
+    return AnalysisResult(
+        hand=tiles_to_compact(tiles),
+        tile_count=13,
+        options=[],
+        visible_counts=context.visible_counts,
+        exposed_triplets=context.exposed_triplets,
+        pre_draw=draw_results,
+    )
+
+
+def _analyze_discard(tiles: list[Tile], context: TableContext) -> AnalysisResult:
+    """14 张手牌：评估每张可能的切牌。"""
+    original_counts = _copy_counts(tiles)
     original_suit_load = Counter(tile.suit for tile in tiles if tile.suit in NUMBER_SUITS)
     major_suit = ""
     major_suit_count = 0
@@ -313,6 +390,7 @@ def evaluate_hand(
     options.sort(key=lambda option: option.total_score, reverse=True)
     return AnalysisResult(
         hand=tiles_to_compact(tiles),
+        tile_count=14,
         options=options,
         visible_counts=context.visible_counts,
         exposed_triplets=context.exposed_triplets,
@@ -320,11 +398,18 @@ def evaluate_hand(
 
 
 def result_to_dict(result: AnalysisResult) -> dict:
-    return {
+    d = {
         "hand": result.hand,
+        "tile_count": result.tile_count,
         "visible_counts": dict(result.visible_counts),
         "exposed_triplets": sorted(result.exposed_triplets),
-        "options": [
+    }
+    if result.tile_count == 13:
+        d["mode"] = "pre-draw"
+        d["pre_draw"] = result.pre_draw[:30]  # 前30个最值得摸的牌
+    else:
+        d["mode"] = "discard"
+        d["options"] = [
             {
                 "discard": option.discard,
                 "total_score": option.total_score,
@@ -335,5 +420,5 @@ def result_to_dict(result: AnalysisResult) -> dict:
                 "summary": option.summary,
             }
             for option in result.options
-        ],
-    }
+        ]
+    return d

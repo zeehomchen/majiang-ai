@@ -167,10 +167,15 @@ def _save_debug_images(hand_frame, river_frame) -> None:
 
 
 def _print_text_result(result_dict: dict, top: int) -> None:
+    # 13 张摸牌前分析
+    if result_dict.get("mode") == "pre-draw":
+        _print_pre_draw_result(result_dict, top)
+        return
+
     options = result_dict["options"][:top]
     best = options[0]
     hand_raw = result_dict["hand"]
-    print(f"当前手牌: {hand_to_readable(hand_raw)}")
+    print(f"当前手牌 (14张): {hand_to_readable(hand_raw)}")
     print(f"  (编码: {hand_raw})")
     print(f"建议切牌: {code_to_chinese(best['discard'])} ({best['discard']})")
     print(f"综合评分: {best['total_score']}")
@@ -195,6 +200,61 @@ def _print_text_result(result_dict: dict, top: int) -> None:
             )
             print("   路线评分: " + route_text)
         print()
+
+
+def _print_pre_draw_result(result_dict: dict, top: int) -> None:
+    """13 张手牌的摸牌前分析输出。"""
+    hand_raw = result_dict["hand"]
+    pre_draw = result_dict.get("pre_draw", [])
+
+    print(f"摸牌前手牌 (13张): {hand_to_readable(hand_raw)}")
+    print(f"  (编码: {hand_raw})")
+    print()
+
+    if not pre_draw:
+        print("(无剩余可摸牌)")
+        return
+
+    # 分类展示
+    wins = [d for d in pre_draw if d["is_win"]]
+    was_tenpai_draws = [d for d in pre_draw if d["was_tenpai"] and not d["is_win"]]
+    normal = [d for d in pre_draw if not d["is_win"] and not d["was_tenpai"]]
+
+    # 自摸牌
+    if wins:
+        print("=== 摸到即自摸 ===")
+        for d in wins:
+            print(f"  {code_to_chinese(d['draw'])} ({d['draw']}) → 自摸胡牌！")
+            print(f"    剩余 {d['remaining']} 张")
+        print()
+
+    # 听牌中
+    if was_tenpai_draws:
+        print("=== 当前已听牌，摸到后切牌建议 ===")
+        for d in was_tenpai_draws[:10]:
+            print(f"  摸 {code_to_chinese(d['draw'])} ({d['draw']}) → 打 {code_to_chinese(d['best_discard'])} ({d['best_discard']})")
+            print(f"    评分 {d['score']:.0f}, 剩余 {d['remaining']} 张")
+        print()
+
+    # 非听牌摸牌后有最佳切牌
+    if normal:
+        shown = normal[:top]
+        print(f"=== 摸牌后最佳操作 (显示前 {len(shown)} 个) ===")
+        for d in shown:
+            dc = d["draw"]
+            bd = d["best_discard"]
+            if dc == bd:
+                print(f"  摸 {code_to_chinese(dc)} ({dc}) → 直接打出 (评分 {d['score']:.0f}, 剩 {d['remaining']} 张)")
+            else:
+                print(f"  摸 {code_to_chinese(dc)} ({dc}) → 打 {code_to_chinese(bd)} ({bd}) | 评分 {d['score']:.0f} | 进张 {d['effective_draws']} | 剩 {d['remaining']} 张")
+
+    # 总结
+    total_good = len(wins) + len(was_tenpai_draws)
+    total_remaining = sum(d["remaining"] for d in wins + was_tenpai_draws)
+    if total_good > 0:
+        print(f"\n总结: 有 {total_remaining} 张好牌可摸 ({total_good} 种)，优先等待摸牌。")
+    else:
+        print(f"\n总结: 当前未听牌，建议按上述排名进张。")
 
 
 def _print_mcts_result(result, top: int) -> None:
