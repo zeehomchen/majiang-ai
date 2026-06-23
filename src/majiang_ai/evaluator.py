@@ -213,6 +213,109 @@ def _remaining_copies(code: str, hand_counts: Counter[str], visible_counts: Coun
     return max(0, 4 - hand_counts[code] - visible_counts[code])
 
 
+# ══════════════════════════════════════════════
+# 牌河防守分析 —— 点炮风险计算
+# ══════════════════════════════════════════════
+
+def _defense_adjustment(
+    discard_code: str,
+    visible_counts: Counter[str],
+    hand_counts: Counter[str],
+    round_phase: str,
+) -> float:
+    """计算打出某张牌的安全度调整值。
+
+    正值 = 安全，鼓励打；负值 = 危险，惩罚切牌。
+
+    核心逻辑:
+      1. 直接安全度：已出张数 ≥2 → 安全，≥3 → 绝对安全
+      2. 邻牌危险：周围牌没人出 → 别人可能在等你
+      3. 筋牌逻辑：隔张出了很多 → 中间牌危险
+      4. 壁牌逻辑：某数字4张全见 → 邻牌变安全
+      5. 相位加权：晚期防守加强 ×1.5
+    """
+    visible = visible_counts.get(discard_code, 0)
+    hand_has = hand_counts.get(discard_code, 0)
+    total_visible = visible + hand_has
+
+    # ── 1. 直接安全度 ──
+    if visible >= 3:
+        return 25.0       # 绝张，绝对安全
+    if visible >= 2:
+        return 15.0       # 较安全
+    if visible == 1:
+        return 0.0        # 中性，不奖不罚
+
+    # 没出过的牌才进入危险分析
+
+    # ── 2. 字牌：没出过的字牌不太危险（只能碰不能顺） ──
+    if discard_code[1] == "z":
+        # 但如果别人可能成对，也有点风险
+        if visible == 0:
+            return -5.0    # 完全没出过的字牌，微风险
+        return 0.0
+
+    # ── 3. 数牌：深度危险分析 ──
+    rank = int(discard_code[0])
+    suit = discard_code[1]
+
+    danger = 0.0
+
+    # 3a. 邻牌危险：周围 ±1, ±2 的牌可见度越低越危险
+    for offset in (-2, -1, 1, 2):
+        n_rank = rank + offset
+        if 1 <= n_rank <= 9:
+            neighbor = f"{n_rank}{suit}"
+            n_visible = visible_counts.get(neighbor, 0)
+            if n_visible == 0:
+                danger += 12.0     # 邻牌没人出 → 别人可能全捏在手里等你
+            elif n_visible == 1:
+                danger += 5.0
+
+    # 3b. 筋牌逻辑：如果 rank-2 和 rank+2 出了很多，中间牌变安全
+    #       如果只出了一边的隔张，另一边没人出→危险
+    left_visible = 0
+    right_visible = 0
+    if rank - 2 >= 1:
+        left_visible = visible_counts.get(f"{rank-2}{suit}", 0)
+    if rank + 2 <= 9:
+        right_visible = visible_counts.get(f"{rank+2}{suit}", 0)
+
+    if left_visible >= 2 and right_visible >= 2:
+        danger -= 15.0    # 两筋都通了，中间牌变安全
+    elif left_visible >= 2:
+        danger += 6.0     # 只通了一边筋
+    elif right_visible >= 2:
+        danger += 6.0
+
+    # 3c. 边张特殊处理
+    if rank == 1:
+        n2 = visible_counts.get(f"2{suit}", 0)
+        n3 = visible_counts.get(f"3{suit}", 0)
+        if n2 >= 2 or n3 >= 2:
+            danger += 8.0  # 边张挨着的出了很多，边张变危险
+    if rank == 9:
+        n8 = visible_counts.get(f"8{suit}", 0)
+        n7 = visible_counts.get(f"7{suit}", 0)
+        if n8 >= 2 or n7 >= 2:
+            danger += 8.0
+
+    # 3d. 壁牌检测：某数字4张全见 → 墙壁形成，相关牌变安全
+    for wall_rank in range(1, 10):
+        wall_code = f"{wall_rank}{suit}"
+        if wall_code == discard_code:
+            continue
+        wall_visible = visible_counts.get(wall_code, 0) + hand_counts.get(wall_code, 0)
+        if wall_visible >= 4:
+            if abs(wall_rank - rank) <= 2:
+                danger -= 10.0   # 有壁，邻牌更安全
+
+    # ── 4. 相位加权 ──
+    phase_mult = {"early": 0.5, "mid": 1.0, "late": 1.5}.get(round_phase, 1.0)
+
+    return -danger * phase_mult
+
+
 def _effective_draws(tiles: list[Tile], context: TableContext) -> tuple[int, list[str]]:
     baseline = _base_score(tiles, context)
     hand_counts = _copy_counts(tiles)
@@ -362,6 +465,10 @@ def _analyze_discard(tiles: list[Tile], context: TableContext) -> AnalysisResult
         route_scores = _route_scores(remaining_tiles, context)
         effective_draws, improving_tiles = _effective_draws(remaining_tiles, context)
         total_score = base_score + effective_draws * 2.5
+        # ── 牌河防守调整 ──
+        total_score += _defense_adjustment(
+            discard_code, context.visible_counts, original_counts, context.round_phase
+        )
         discard_tile = grouped[0]
         if major_suit_count >= 6 and discard_tile.suit in NUMBER_SUITS:
             if discard_tile.suit == major_suit:

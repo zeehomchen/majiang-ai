@@ -102,7 +102,7 @@ def _ai_mcts_discard(hand: list[str], visible_str: str) -> str:
 # ── AI-2: 启发式评估 ──
 
 def _ai_heuristic_discard(hand: list[str], visible_str: str) -> str:
-    """evaluator 评分选最优切牌。"""
+    """evaluator 评分 + 牌河防守调整 选最优切牌。"""
     if not hand:
         return ""
     if len(hand) <= 2:
@@ -110,7 +110,15 @@ def _ai_heuristic_discard(hand: list[str], visible_str: str) -> str:
     compact = _compact(hand)
     try:
         from majiang_ai.evaluator import evaluate_hand
-        result = evaluate_hand(hand=compact, visible_tiles=visible_str)
+        # 根据可见牌数量推断牌局阶段
+        discards_count = visible_str.count(",") + 1 if visible_str else 0
+        if discards_count >= 40:
+            phase = "late"
+        elif discards_count >= 20:
+            phase = "mid"
+        else:
+            phase = "early"
+        result = evaluate_hand(hand=compact, visible_tiles=visible_str, round_phase=phase)
         if result.options:
             return result.options[0].discard
     except Exception:
