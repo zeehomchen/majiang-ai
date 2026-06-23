@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+
+# 调试截图 (只忽略根目录的 debug 截图，保留模板)
+debug_*.png
+snap.png
+calibration_*.png
+hand_*.png
+proj_debug.png
+tiles_detected.png
+tuner_cap.jpg
+
+# 临时/调试脚本
+scan_*.py
+tuner.py
+tuner_server.py
+build_templates.py
+build_templates_now.py
+build_pung.py
+tune_region.py
+snap.py
+
+# 模板临时文件 (保留编码命名的模板)
+tile_templates/slot_*.png
+tile_templates_*/
+tile_labels.txt
+tile_map.txt
+pung_map.txt
+
+# 调参HTML (每次重新生成)
+tuner.html
+tuner_tiles.html
+tuner_*.html
+
+# IDE
+.vscode/
+.idea/
+
+# 环境
+venv/
+.venv/
+env/
