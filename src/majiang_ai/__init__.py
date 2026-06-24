@@ -19,7 +19,17 @@ from .evaluator import evaluate_hand
 from .enhanced_evaluator import evaluate_hand_enhanced, EnhancedMahjongEvaluator
 from .parser import parse_compact_tiles, parse_tile_list, tiles_to_compact
 from .capture import Capturer, CaptureMode, CaptureConfig
-from .overlay import create_overlay, MahjongOverlay, OverlayConfig
+
+# 暂时注释掉 overlay 相关导入，避免没有 PyQt5 时报错
+# 如需使用悬浮窗功能，请手动安装 PyQt5 后取消注释
+# try:
+#     from .overlay import create_overlay, MahjongOverlay, OverlayConfig
+#     _has_overlay = True
+# except ImportError:
+#     _has_overlay = False
+#     create_overlay = None
+#     MahjongOverlay = None
+#     OverlayConfig = None
 
 __all__ = [
     "evaluate_hand",
@@ -31,7 +41,12 @@ __all__ = [
     "Capturer",
     "CaptureMode",
     "CaptureConfig",
-    "create_overlay",
-    "MahjongOverlay",
-    "OverlayConfig",
 ]
+
+# 只在有overlay时添加到__all__
+# if _has_overlay:
+#     __all__.extend([
+#         "create_overlay",
+#         "MahjongOverlay",
+#         "OverlayConfig",
+#     ])

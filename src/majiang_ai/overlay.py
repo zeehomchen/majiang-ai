@@ -97,11 +97,15 @@ class GlobalStatus:
     fan_trend: str = ""
 
 
-class OverlaySignal(QObject):
-    """PyQt信号"""
-    update_signal = pyqtSignal(object)
-    hide_signal = pyqtSignal()
-    show_signal = pyqtSignal()
+# PyQt5 相关的类，仅在可用时定义
+if PYQT_AVAILABLE:
+    class OverlaySignal(QObject):
+        """PyQt信号"""
+        update_signal = pyqtSignal(object)
+        hide_signal = pyqtSignal()
+        show_signal = pyqtSignal()
+else:
+    OverlaySignal = None
 
 
 class MahjongOverlay:

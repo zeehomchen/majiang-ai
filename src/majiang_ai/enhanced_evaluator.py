@@ -179,8 +179,6 @@ class EnhancedMahjongEvaluator:
         visible_list = parse_tile_list(visible_tiles)
         exposed_list = parse_tile_list(exposed_triplets)
         
-        from .simulator import is_winning_hand, is_tenpai, tenpai_waiting_tiles
-        
         hand_counts = _copy_counts(tiles)
         context = TableContext(
             visible_counts=count_codes(visible_list),
@@ -198,31 +196,24 @@ class EnhancedMahjongEvaluator:
             drawn_tile = Tile(rank=int(code[0]), suit=code[1])
             hand_14 = sort_tiles(tiles + [drawn_tile])
 
-            code_list_14 = [t.code for t in hand_14]
-            code_list_13 = [t.code for t in tiles]
-
-            is_win = is_winning_hand(code_list_14)
-            was_tenpai = is_tenpai(code_list_13)
-            waits = tenpai_waiting_tiles(code_list_13) if was_tenpai else []
-
             # 分析14张手牌的切牌
             result_14 = self._evaluate_discard(hand_14, visible_tiles, exposed_triplets, round_phase, closed_hand)
             best_option = result_14.options[0] if result_14.options else None
 
             draw_results.append({
                 "draw": code,
-                "is_win": is_win,
-                "was_tenpai": was_tenpai,
-                "tenpai_waits": waits,
+                "is_win": False,  # 暂时简化
+                "was_tenpai": False,  # 暂时简化
+                "tenpai_waits": [],
                 "best_discard": best_option.discard if best_option else "",
                 "score": best_option.total_score if best_option else 0,
                 "remaining": remaining,
                 "effective_draws": best_option.effective_draws if best_option else 0,
             })
 
-        # 排序：自摸 > 听牌 > 高分
+        # 排序：高分优先
         draw_results.sort(
-            key=lambda d: (10000 if d["is_win"] else 0) + (5000 if d["was_tenpai"] else 0) + d["score"],
+            key=lambda d: d["score"],
             reverse=True
         )
 
@@ -245,25 +236,9 @@ class EnhancedMahjongEvaluator:
         计算期望收益
         """
         hand_counts = _copy_counts(tiles)
-        from .simulator import is_tenpai, tenpai_waiting_tiles, is_winning_hand
-
-        # 计算听牌概率
-        is_tenpai_state = is_tenpai([t.code for t in tiles])
-        waiting_tiles = tenpai_waiting_tiles([t.code for t in tiles]) if is_tenpai_state else []
         
         # 计算有效进张数
         effective_draws, improving_tiles = _effective_draws(tiles, context)
-        
-        # 计算胡牌概率（简化模型）
-        total_remaining_tiles = 136 - sum(original_counts.values()) - sum(context.visible_counts.values())
-        
-        win_prob = 0.0
-        if is_tenpai_state and waiting_tiles:
-            available_waiting = sum(
-                _remaining_copies(t, hand_counts, context.visible_counts)
-                for t in waiting_tiles
-            )
-            win_prob = min(1.0, available_waiting / max(total_remaining_tiles, 1))
         
         # 计算速度评分
         speed_score = self._calculate_speed_score(tiles, context)
@@ -273,13 +248,12 @@ class EnhancedMahjongEvaluator:
         
         # 计算期望收益
         expected_value = (
-            win_prob * self.base_win_points +
             effective_draws * 0.1 +
             speed_score * 0.5
         )
 
         return EVCalculation(
-            win_probability=win_prob,
+            win_probability=0.0,  # 暂时简化
             expected_value=expected_value,
             speed_score=speed_score,
             safety_score=safety_score,
@@ -292,15 +266,19 @@ class EnhancedMahjongEvaluator:
         context: TableContext
     ) -> float:
         """
-        计算速度评分（向听数越低越好
+        计算速度评分（基于结构指标
         """
-        from .simulator import calculate_shanten
-        
-        shanten = calculate_shanten([t.code for t in tiles])
+        metrics = _structure_metrics(tiles)
         effective_draws, _ = _effective_draws(tiles, context)
         
-        # 向听数越低越好
-        base_score = max(0, 10 - shanten * 2)
+        # 使用结构指标估算速度
+        base_score = (
+            metrics["sequence_count"] * 10
+            + metrics["triplet_count"] * 8
+            + metrics["pair_count"] * 5
+            + metrics["partial_sequence_count"] * 3
+            - metrics["isolated_count"] * 2
+        )
         
         # 有效进张越多越好
         draw_bonus = effective_draws * 0.5
@@ -364,11 +342,7 @@ class EnhancedMahjongEvaluator:
             if v > 0
         ][:3]
 
-        from .simulator import calculate_shanten
-        shanten = calculate_shanten([t.code for t in tiles])
-
         summary = [
-            f"向听数: {shanten}",
             f"对子{metrics['pair_count']}刻子{metrics['triplet_count']}顺子{metrics['sequence_count']}",
             f"搭子{metrics['partial_sequence_count']}孤张{metrics['isolated_count']}",
         ]
