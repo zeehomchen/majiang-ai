@@ -1,0 +1,18 @@
+# 广东推倒胡算牌器 - 依赖
+
+# 核心依赖
+opencv-python>=4.8.0
+numpy>=1.24.0
+Pillow>=10.0.0
+mss>=9.0.0
+
+# YOLO相关（可选）
+ultralytics>=8.0.0
+onnxruntime>=1.15.0
+
+# GUI（推荐）
+PyQt5>=5.15.0
+
+# 原有依赖
+# dxcam  # Windows可选
+# pywin32  # Windows可选

@@ -1,7 +1,9 @@
-"""屏幕捕获模块。
-
-优先使用 mss (屏幕绝对坐标, 兼容性最好)，
-dxcam (DXGI, 高性能) 作为可选加速器。
+"""
+屏幕采集模块 - 支持多种非侵入式采集方式
+1. OBS虚拟相机 (VirtualCameraCapture)
+2. PrintWindow API (后台窗口捕获)
+3. mss (屏幕截取)
+4. dxcam (高性能DXGI捕获)
 """
 
 from __future__ import annotations
@@ -10,10 +12,28 @@ import json
 import os
 import time
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 import numpy as np
+
+# 导入虚拟相机模块
+try:
+    from .virtual_camera import VirtualCameraCapture, VirtualCameraConfig
+    VIRTUAL_CAMERA_AVAILABLE = True
+except ImportError:
+    VIRTUAL_CAMERA_AVAILABLE = False
+
+
+class CaptureMode(Enum):
+    """采集模式枚举"""
+    VIRTUAL_CAMERA = "virtual_camera"
+    PRINT_WINDOW = "print_window"
+    MSS = "mss"
+    DX_CAM = "dxcam"
+    AUTO = "auto"  # 自动选择最优方式
+
 
 # ---------------------------------------------------------------------------
 # 依赖检测
@@ -210,16 +230,9 @@ class CaptureError(Exception):
 
 
 class Capturer:
-    """屏幕捕获器。
-
-    优先 dxcam (高性能)，不可用时自动降级为 mss。
-    两者失败则报错。
-
-    用法:
-        cap = Capturer()
-        cap.start()
-        frame = cap.capture_hand()
-        cap.stop()
+    """
+    通用屏幕采集器
+    支持多种非侵入式采集方式，优先使用OBS虚拟相机
     """
 
     def __init__(
@@ -227,28 +240,58 @@ class Capturer:
         window_title: Optional[str] = None,
         title_keywords: Optional[list[str]] = None,
         config: Optional[CaptureConfig] = None,
-        force_mss: bool = False,
+        mode: CaptureMode = CaptureMode.AUTO,
+        virtual_camera_config: Optional[VirtualCameraConfig] = None,
         debug: bool = False,
     ):
         self._title_keywords = title_keywords
         self._config = config or _load_saved_config() or DEFAULT_CONFIG
-        self._force_mss = force_mss
+        self._mode = mode
+        self._virtual_camera_config = virtual_camera_config
         self._debug = debug
 
-        self._camera: Any = None
-        self._sct: Any = None  # mss instance
+        self._virtual_camera: Optional[VirtualCameraCapture] = None
+        self._camera: Any = None  # dxcam
+        self._sct: Any = None  # mss
         self._hwnd: Optional[int] = None
         self._window_rect: Optional[tuple[int, int, int, int]] = None
-        self._monitor_offset: tuple[int, int] = (0, 0)  # dxcam 用
+        self._monitor_offset: tuple[int, int] = (0, 0)
         self._started = False
         self._engine: str = ""
+        self._print_window_frame: Optional[np.ndarray] = None
+
 
     # ------------------------------------------------------------------
     # 生命周期
     # ------------------------------------------------------------------
 
     def start(self) -> bool:
-        """初始化捕获引擎并定位麻将窗口。"""
+        """
+        启动采集器
+
+        根据选择的模式启动对应的采集方式
+
+        Returns:
+            启动是否成功
+        """
+        # 模式1: 虚拟相机
+        if self._mode in (CaptureMode.VIRTUAL_CAMERA, CaptureMode.AUTO):
+            if VIRTUAL_CAMERA_AVAILABLE:
+                try:
+                    self._virtual_camera = VirtualCameraCapture(self._virtual_camera_config)
+                    if self._virtual_camera.start():
+                        self._engine = "virtual_camera"
+                        self._started = True
+                        return True
+                except Exception as e:
+                    if self._debug:
+                        print(f"虚拟相机启动失败: {e}")
+                
+                # 如果是AUTO模式且虚拟相机失败，继续尝试其他方式
+                if self._mode == CaptureMode.VIRTUAL_CAMERA:
+                    raise CaptureError("虚拟相机启动失败")
+        
+        # 模式2: PrintWindow / mss / dxcam（需要找到窗口）
         keywords = self._title_keywords or ["腾讯", "麻将", "QQGame", "Mahjong", "Tencent"]
         found = find_mahjong_window(keywords)
         if found is None:
@@ -256,36 +299,53 @@ class Capturer:
 
         self._hwnd = found[0]
         self._window_rect = (found[1], found[2], found[3], found[4])
-
-        # 初始化 mss (始终可用作降级)
+        
+        # 尝试PrintWindow
+        if self._mode in (CaptureMode.PRINT_WINDOW, CaptureMode.AUTO):
+            test_frame = self._grab_printwindow()
+            if test_frame is not None:
+                self._engine = "print_window"
+                self._started = True
+                print(f"✅ PrintWindow采集模式已启动")
+                return True
+        
+        # 初始化mss作为降级方案
         if _MSS_AVAILABLE:
             self._sct = mss.mss()
-
-        # 初始化 dxcam
-        use_dxcam = _USE_DXCAM and not self._force_mss
+        
+        # 初始化dxcam
+        use_dxcam = _DXCAM_AVAILABLE and self._mode in (CaptureMode.DX_CAM, CaptureMode.AUTO)
         if use_dxcam:
             try:
-                # 找到窗口所在的显示器偏移
                 self._monitor_offset = self._find_monitor_for_window(found[1:])
                 self._camera = dxcam.create(region=self._monitor_region(), output_color="BGR")
                 self._engine = "dxcam"
             except Exception as exc:
                 if self._debug:
-                    print(f"[capture] dxcam 初始化失败: {exc}，降级为 mss")
+                    print(f"dxcam初始化失败: {exc}，降级为mss")
                 self._camera = None
 
         if self._camera is None and self._sct is not None:
             self._engine = "mss"
         elif self._camera is None:
-            raise CaptureError("没有可用的截屏引擎。请安装: pip install mss dxcam")
+            raise CaptureError("没有可用的截屏引擎。请安装: pip install mss dxcam opencv-python")
 
         self._started = True
+        print(f"✅ 采集引擎启动: {self._engine}")
         return True
 
+
     def stop(self) -> None:
+        """停止采集器"""
         self._started = False
+        # 停止虚拟相机
+        if self._virtual_camera is not None:
+            self._virtual_camera.stop()
+            self._virtual_camera = None
         self._camera = None
         self._sct = None
+        self._print_window_frame = None
+
 
     @property
     def is_started(self) -> bool:
@@ -429,29 +489,46 @@ class Capturer:
             return None
 
     def capture_region(self, left: float, top: float, width: float, height: float) -> np.ndarray:
-        """抓取窗口内相对坐标区域 (0.0-1.0) 的截图，返回 BGR numpy 数组。
+        """
+        抓取窗口内相对坐标区域 (0.0-1.0) 的截图，返回 BGR numpy 数组
 
-        优先 PrintWindow（最小化也可用），降级为 mss/dxcam。
+        支持多种采集方式：
+        - 虚拟相机 (OBS)
+        - PrintWindow (后台捕获)
+        - dxcam / mss (前台截屏)
         """
         if not self._started:
-            raise CaptureError("Capturer 未启动，请先调用 start()。")
+            raise CaptureError("Capturer未启动，请先调用start()。")
 
-        # ---- 方式 1: PrintWindow (后台捕获) ----
-        full = self._grab_printwindow()
-        if full is not None and full.size > 0:
-            fh, fw = full.shape[:2]
-            x1 = int(left * fw)
-            y1 = int(top * fh)
-            x2 = int((left + width) * fw)
-            y2 = int((top + height) * fh)
+        # 方式1: 虚拟相机
+        if self._engine == "virtual_camera" and self._virtual_camera is not None:
+            frame = self._virtual_camera.capture_frame()
+            if frame is None:
+                raise CaptureError("虚拟相机捕获失败")
+            h, w = frame.shape[:2]
+            x1 = int(left * w)
+            y1 = int(top * h)
+            x2 = int((left + width) * w)
+            y2 = int((top + height) * h)
             x1, y1 = max(0, x1), max(0, y1)
-            x2, y2 = min(fw, x2), min(fh, y2)
-            if x2 > x1 and y2 > y1:
-                if self._engine == "":
-                    self._engine = "printwindow"
-                return full[y1:y2, x1:x2].copy()
+            x2, y2 = min(w, x2), min(h, y2)
+            return frame[y1:y2, x1:x2].copy()
 
-        # ---- 方式 2: dxcam / mss (前台截屏降级) ----
+        # 方式2: PrintWindow
+        if self._engine == "print_window":
+            full = self._grab_printwindow()
+            if full is not None and full.size > 0:
+                fh, fw = full.shape[:2]
+                x1 = int(left * fw)
+                y1 = int(top * fh)
+                x2 = int((left + width) * fw)
+                y2 = int((top + height) * fh)
+                x1, y1 = max(0, x1), max(0, y1)
+                x2, y2 = min(fw, x2), min(fh, y2)
+                return full[y1:y2, x1:x2].copy()
+            raise CaptureError("PrintWindow捕获失败")
+
+        # 方式3: dxcam/mss
         self._refresh_window_rect()
         if self._window_rect is None:
             raise CaptureError("无法获取窗口坐标。")
@@ -473,8 +550,6 @@ class Capturer:
                 return frame
 
         if self._sct is not None:
-            if self._engine == "":
-                self._engine = "mss"
             return self._grab_mss(sx, sy, sw, sh)
 
         raise CaptureError("所有截屏引擎均失败。")
