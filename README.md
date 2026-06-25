@@ -1,8 +1,14 @@
+
+
 # 广东推倒胡智能算牌器
 
 基于 **OBS虚拟相机采集 + 多策略图像匹配 + EV期望收益模型** 的麻将实战AI助手，专为**广东推倒胡**规则深度优化。
 
 ---
+## 界面交互展示
+<img width="1402" height="932" alt="071917e42e1ab1b3f078c6f08408d31f" src="https://github.com/user-attachments/assets/05fdbd4e-45d3-45f1-bfd6-4bafdbe005f9" />
+
+
 
 ## 快速开始
 
