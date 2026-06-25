@@ -117,7 +117,7 @@ class VirtualCameraCapture:
         return self._started
 
     @staticmethod
-    def _auto_detect_camera(self, max_index: int = 10) -> Optional[int]:
+    def _auto_detect_camera(max_index: int = 10) -> Optional[int]:
         """
         自动检测可用的OBS虚拟相机
 
@@ -145,7 +145,7 @@ class VirtualCameraCapture:
         return None
 
     @staticmethod
-    def list_cameras(self, max_index: int = 10) -> list[int]:
+    def list_cameras(max_index: int = 10) -> list[int]:
         """
         列出所有可用摄像头索引
 
